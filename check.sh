@@ -3,5 +3,5 @@
 quint repl \
   --backend typescript \
   -r survey.qnt::roomy \
-  'pdsMissing' \
+  'stratosMissing' \
   'opensocialMissing'
