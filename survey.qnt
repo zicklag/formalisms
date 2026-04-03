@@ -17,7 +17,8 @@ module affordances {
     // User-owned private data
     //
     | UserStorePrivatePersonalData
-    | UserStorePrivateSharedData         // Shared meaning others can read
+    // Shared meaning others can read
+    | UserStorePrivateSharedData
 
     //
     // Community-owned data
@@ -61,7 +62,12 @@ module roomy {
   pure val requirements = Set(
     UserStorePublicPersonalData,
     UserStorePrivatePersonalData,
-    UserStorePrivateSharedData,
+
+    // I think we may not need this. If the community has private shared
+    // data, then we can just use that instead of having personal shared
+    // data.
+    //
+    // UserStorePrivateSharedData,
 
     CommunityMembersWriteData,
     CommunityStorePrivateSharedData,
@@ -73,6 +79,7 @@ module roomy {
     //
     // As long as we have `CommunityFlexibleAccessControl` we should be fine without a write hook I
     // think.
+    //
     // CommunityAuthWriteHook 
   )
 
