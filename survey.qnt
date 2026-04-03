@@ -73,7 +73,6 @@ module stratos {
   import affordances.*  
 
   pure val affordances = Set(
-    UserStorePrivatePersonalData,
     UserStorePrivateSharedData,
     UserPrivateDataWithPublicStubs,
     CommunityAdminsManageMembers
