@@ -39,16 +39,16 @@ module affordances {
 
     // A community can store public data in its own repo.
     | CommunityStorePublicData
-    // Community members can write data to the community repo.
-    | CommunityMembersWriteData
+    // Community members can write data to the community's shared repo. 
+    | CommunityMembersWriteCommunityData
     // A community can store private data that it selectively shares with others ( probably members ).
     | CommunityStorePrivateSharedData
     // Community admins can manage ( add, remove, promote, demote, etc ) members in the community.
     | CommunityAdminsManageMembers
-    // There is access control around record writing ( at least) such that there are ways to do
-    // things like members being able to create posts and edit their own, but not delete others',
-    // etc.
-    | CommunityFlexibleAccessControl
+    // There is access control around record reading / writing *to the community repo* such that
+    // there are ways to do things like members being able to create posts and edit their own, but
+    // not delete others', etc.
+    | CommunityDataFlexibleAccessControl
     // There is a way to make a custom auth hook that is required to pass before writes to the
     // community repo are allowed.
     | CommunityAuthWriteHook
@@ -63,6 +63,21 @@ module pds {
   pure val affordances = Set(
     UserStorePublicPersonalData,
     UserPublicDataSubscription
+  )
+}
+
+/// # Permissioned Spaces
+///
+/// The work-in-progress ATProto permissions data proposal.
+///
+/// https://dholms.leaflet.pub/3mhj6bcqats2o
+module permissioned_spaces {
+  import affordances.*
+
+  pure val affordances = Set(
+    UserStorePrivatePersonalData,
+    UserStorePrivateSharedData,
+    CommunityAdminsManageMembers
   )
 }
 
@@ -87,7 +102,7 @@ module opensocial {
 
   pure val affordances = Set(
     CommunityStorePublicData,
-    CommunityMembersWriteData,
+    CommunityMembersWriteCommunityData,
     CommunityAdminsManageMembers
   )  
 }
@@ -100,6 +115,7 @@ module roomy {
   import pds
   import opensocial
   import stratos
+  import permissioned_spaces
 
   pure val requirements = Set(
     UserStorePublicPersonalData,
@@ -111,10 +127,10 @@ module roomy {
     //
     // UserStorePrivateSharedData,
 
-    CommunityMembersWriteData,
+    CommunityMembersWriteCommunityData,
     CommunityStorePrivateSharedData,
     CommunityAdminsManageMembers,
-    CommunityFlexibleAccessControl
+    CommunityDataFlexibleAccessControl
 
     // Do we need this for sure? We might for things like timestamps, etc? Or maybe that can be done
     // at the AppView layer and not at the repository layer. 🤔
@@ -126,10 +142,20 @@ module roomy {
   )
 
   /// The affordances that stratos + PDS is missing that Roomy needs
+  pure val permissionedSpacesMissing = 
+    requirements.exclude(union(pds::affordances, permissioned_spaces::affordances))
+
+  /// The affordances that stratos + PDS is missing that Roomy needs
   pure val stratosMissing = 
     requirements.exclude(union(pds::affordances, stratos::affordances))
 
   /// The affordances that opensocial + PDS is missing that Roomy needs
   pure val opensocialMissing = 
     requirements.exclude(union(pds::affordances, opensocial::affordances))
+
+  /// The affordances missing from all existing solutions
+  pure val allMissing = 
+    permissionedSpacesMissing
+    .intersect(stratosMissing)
+    .intersect(opensocialMissing)
 }

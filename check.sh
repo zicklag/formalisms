@@ -3,5 +3,8 @@
 quint repl \
   --backend typescript \
   -r survey.qnt::roomy \
+  'permissionedSpacesMissing' \
   'stratosMissing' \
-  'opensocialMissing'
+  'opensocialMissing' \
+  'allMissing' \
+  '.exit'
