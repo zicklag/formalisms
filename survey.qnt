@@ -45,13 +45,9 @@ module affordances {
     | CommunityStorePrivateSharedData
     // Community admins can manage ( add, remove, promote, demote, etc ) members in the community.
     | CommunityAdminsManageMembers
-    // There is access control around record reading / writing *to the community repo* such that
-    // there are ways to do things like members being able to create posts and edit their own, but
-    // not delete others', etc.
-    | CommunityDataFlexibleAccessControl
-    // There is a way to make a custom auth hook that is required to pass before writes to the
-    // community repo are allowed.
-    | CommunityAuthWriteHook
+    // The community can delegate write authorization to an external service that can apply
+    // arbitrary logic.
+    | CommunityDelegateWriteToService
 }
 
 /// # ATProto PDS
@@ -120,25 +116,12 @@ module roomy {
   pure val requirements = Set(
     UserStorePublicPersonalData,
     UserStorePrivatePersonalData,
+    UserStorePrivateSharedData,
 
-    // I think we may not need this. If the community has private shared
-    // data, then we can just use that instead of having personal shared
-    // data.
-    //
-    // UserStorePrivateSharedData,
-
-    CommunityMembersWriteCommunityData,
     CommunityStorePrivateSharedData,
     CommunityAdminsManageMembers,
-    CommunityDataFlexibleAccessControl
-
-    // Do we need this for sure? We might for things like timestamps, etc? Or maybe that can be done
-    // at the AppView layer and not at the repository layer. 🤔
-    //
-    // As long as we have `CommunityFlexibleAccessControl` we should be fine without a write hook I
-    // think.
-    //
-    // CommunityAuthWriteHook 
+    CommunityMembersWriteCommunityData,
+    CommunityDelegateWriteToService
   )
 
   /// The affordances that stratos + PDS is missing that Roomy needs
