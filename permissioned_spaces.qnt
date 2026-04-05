@@ -23,7 +23,8 @@ module permissioned_spaces {
     any {
       loginAny,
       createSpaceAny,
-      // addMemberToSpaceAny,
+      setMemberPermissionAny,
+      removeMemberAny,
     }
   }
 
@@ -55,15 +56,30 @@ module permissioned_spaces {
     nondet mode = 0.to(1).oneOf()
     createSpace(user, if (mode == 0) DefaultAllow else DefaultDeny)
 
-  action addMemberToSpace(user: UserDid, space: SpaceDid, newMember: UserDid, access: Access): bool = all {
+  action setMemberPermission(user: UserDid, space: SpaceDid, member: UserDid, access: Access): bool = all {
     time::stutter,
-    pds::addMemberToSpace(user, space, newMember, access),
+    pds::setMemberPermission(user, space, member, access),
     pig::stutter,
     moose::stutter,
   }
-  // action addMemberToSpaceAny =
-  //   nondet space = pds::spaces.oneOf()
-  //   nondet access = 0.to(1).oneOf()
+  action setMemberPermissionAny =
+    nondet space = pds::spaces.oneOf()
+    nondet owner = pds::userControlledDids.keys().filter(x => pds::userControlledDids.get(x).contains(space.did)).oneOf()
+    nondet access = 0.to(1).oneOf()
+    nondet member = pds::users.oneOf()
+    setMemberPermission(owner, space.did, member, if (access == 0) Read else Write)
+
+  action removeMember(user: UserDid, space: SpaceDid, member: UserDid): bool = all {
+    time::stutter,
+    pds::removeMember(user, space, member),
+    pig::stutter,
+    moose::stutter,
+  }
+  action removeMemberAny =
+    nondet space = pds::spaces.oneOf()
+    nondet owner = pds::userControlledDids.keys().filter(x => pds::userControlledDids.get(x).contains(space.did)).oneOf()
+    nondet member = space.members.keys().oneOf()
+    removeMember(owner, space.did, member)
 }
 
 module pds {
@@ -135,7 +151,7 @@ module pds {
       clientMode: mode,
       clientList: Set(),
       // Give the creator write access to the space
-      members: Set((owner, Write))
+      members: Map(owner -> Write)
     })),
 
     // We give the key for the new space DID to the owner, so they control the space
@@ -149,7 +165,8 @@ module pds {
     permRepos' = permRepos,
   }
 
-  action addMemberToSpace(user: UserDid, spaceDid: SpaceDid, newMember: UserDid, access: Access): bool =
+  /// Set a member's permission, adding them as a member if they weren't already one.
+  action setMemberPermission(user: UserDid, spaceDid: SpaceDid, newMember: UserDid, access: Access): bool =
     all {
       // User exists
       user.in(users),
@@ -160,14 +177,53 @@ module pds {
       // User controls the DID for the space they are modifying
       spaceDid.in(userControlledDids.get(user)),
 
+      // The member doesn't already have the given access
+      not(spaces.exists(x => x.did == spaceDid and x.members.keys().contains(newMember) and x.members.get(newMember) == access)),
+
       // Update spaces
       spaces' = spaces.map(x =>
         // The space that was selected
         if (x.did == spaceDid) {
           // Has a new member
-          x.with("members", x.members.union(Set((newMember, access))))
+          x.with("members", x.members.put(newMember, access))
         }
-        else x)
+        else x),
+      
+      // Unchanged
+      userSessions' = userSessions,
+      userControlledDids' = userControlledDids,
+      nextDid' = nextDid,
+      permRepos' = permRepos,
+    }
+
+  action removeMember(user: UserDid, spaceDid: SpaceDid, member: UserDid): bool =
+    all {
+      // User exists
+      user.in(users),
+
+      // Space exists
+      spaces.filter(x => x.did == spaceDid).size() == 1,
+
+      // User controls the DID for the space they are modifying
+      spaceDid.in(userControlledDids.get(user)),
+
+      // The member is in the space
+      spaces.exists(x => x.did == spaceDid and x.members.keys().contains(member)),
+
+      // Update the spaces to remove the member
+      spaces' = spaces.map(x =>
+        // The space that was selected
+        if (x.did == spaceDid) {
+          // Update members by filtering out the member that we are removing
+          x.with("members", x.members.keys().filter(k => k != member).mapBy(k => x.members.get(k)))
+        }
+        else x),
+
+      // Unchanged
+      userSessions' = userSessions,
+      userControlledDids' = userControlledDids,
+      nextDid' = nextDid,
+      permRepos' = permRepos,
     }
 
   /// Get a member grant token that can be used to sync a private space.
@@ -185,7 +241,7 @@ module pds {
       | DefaultAllow => not(inClientList)
       | DefaultDeny => inClientList
     }
-    pure def userAllowed = space.members.exists(x => x._1 == userDid)
+    pure def userAllowed = space.members.keys().contains(userDid)
 
     if (userAllowed and clientAllowed)
       Some({
@@ -354,7 +410,7 @@ module types {
     // Depending on the cient mode this is either a block or an allow list
     clientList: Set[ClientId],
     // The list of members in the space
-    members: Set[(UserDid, Access)]
+    members: UserDid -> Access,
   }
 }
 
