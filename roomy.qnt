@@ -7,6 +7,7 @@ module roomy {
   import steward
 
   pure val userDids: Set[UserDid] = Set("Alice", "Bob", "Charlie", "Daffodil", "Eve", "Fred", "Greg")
+  pure val roleIds: Set[RoleId] = Set("members", "team", "collaborators")
 
   action init = all {
     id::init,
@@ -21,6 +22,10 @@ module roomy {
     addArbiterAdminAny,
     removeArbiterAdminAny,
     createSpaceAny,
+    setSpaceMemberAccessAny,
+    createRoleAny,
+    addRoleMemberAny,
+    removeRoleMemberAny,
   }
 
   val Inv = all {
@@ -102,7 +107,7 @@ module roomy {
     def arbiter = arbiter::arbiters.get(arbiterDid)
     nondet userDid = arbiter::arbiters.get(arbiterDid).admins.oneOf()
     nondet spaceKey = arbiter.spaces.keys().oneOf()
-    nondet member = userDids.exclude(arbiter.admins).oneOf()
+    nondet member = userDids.map(x => User(x)).union(arbiter.roles.keys().map(x => Role(x))).oneOf()
     nondet access = 0.to(1).oneOf()
     setSpaceMemberAccess(userDid, arbiterDid, spaceKey, member, if (access == 0) Read else Write)
   }
@@ -119,8 +124,54 @@ module roomy {
     nondet userDid = arbiter::arbiters.get(arbiterDid).admins.oneOf()
     nondet spaceKey = arbiter.spaces.keys().oneOf()
     def space = arbiter.spaces.get(spaceKey)
-    nondet member = space.members.keys().exclude(arbiter.admins).oneOf()
+    nondet member = space.members.keys().oneOf()
     removeSpaceMember(userDid, arbiterDid, spaceKey, member)
+  }
+
+  action createRole(userDid, arbiterDid, roleId) = all {
+    arbiter::createRole(userDid, arbiterDid, roleId),
+    id::stutter,
+    pds::stutter,
+    steward::stutter
+  }
+  action createRoleAny = all {
+    nondet arbiterDid = arbiter::arbiters.keys().oneOf()
+    def arbiter = arbiter::arbiters.get(arbiterDid)
+    nondet userDid = arbiter::arbiters.get(arbiterDid).admins.oneOf()
+    nondet roleId = roleIds.oneOf()
+    createRole(userDid, arbiterDid, roleId)
+  }
+
+  action addRoleMember(userDid, arbiterDid, roleId, member) = all {
+    arbiter::addRoleMember(userDid, arbiterDid, roleId, member),
+    id::stutter,
+    pds::stutter,
+    steward::stutter
+  }
+  action addRoleMemberAny = all {
+    nondet arbiterDid = arbiter::arbiters.keys().oneOf()
+    def arbiter = arbiter::arbiters.get(arbiterDid)
+    nondet userDid = arbiter::arbiters.get(arbiterDid).admins.oneOf()
+    nondet roleId = arbiter.roles.keys().oneOf()
+    nondet memberOrRole = 0.to(1).oneOf()
+    nondet member = userDids.oneOf()
+    addRoleMember(userDid, arbiterDid, roleId, member)
+  }
+
+  action removeRoleMember(userDid, arbiterDid, roleId, member) = all {
+    arbiter::removeRoleMember(userDid, arbiterDid, roleId, member),
+    id::stutter,
+    pds::stutter,
+    steward::stutter
+  }
+  action removeRoleMemberAny = all {
+    nondet arbiterDid = arbiter::arbiters.keys().oneOf()
+    def arbiter = arbiter::arbiters.get(arbiterDid)
+    nondet userDid = arbiter::arbiters.get(arbiterDid).admins.oneOf()
+    nondet roleId = arbiter.roles.keys().oneOf()
+    def role = arbiter.roles.get(roleId)
+    nondet member = role.oneOf()
+    removeRoleMember(userDid, arbiterDid, roleId, member)
   }
 }
 
@@ -155,27 +206,94 @@ module arbiter {
   /// Arbiter invariants
   val Inv = all {
     InvAtLeastOneAdmin,
-    InvAdminWriteSpaces,  
+    InvRoleDoesNotSquashIndividualWrite,
+    InvAllAdminsCanWrite,
   }
 
+  /// There is always at least one admin for any given arbiter
   val InvAtLeastOneAdmin =
     arbiters.keys().forall(arbiterDid =>
       def arbiter = arbiters.get(arbiterDid)
       arbiter.admins.size() >= 1
     )
 
-  /// Arbiter admins always have write access to spaces owned by the arbiter
-  val InvAdminWriteSpaces = 
+  /// Invariant: all admins can write to every space managed by the arbiter they are an admin of.
+  val InvAllAdminsCanWrite =
     arbiters.keys().forall(arbiterDid =>
       def arbiter = arbiters.get(arbiterDid)
-      arbiter.admins.forall(adminDid =>
-        arbiter.spaces.keys().forall(spaceKey =>
-          def space = arbiter.spaces.get(spaceKey)
-          adminDid.in(space.members.keys()) and space.members.get(adminDid) == Write
-        ) 
+      arbiter.spaces.keys().forall(spaceKey =>
+        def space = arbiter.spaces.get(spaceKey) 
+        match getSpaceMemberList(arbiterDid, spaceKey) {
+          | Some(flatUserAccessList) =>
+            arbiter.admins.forall(adminDid =>
+              flatUserAccessList.get(adminDid) == Write 
+            )
+          | None => false
+        }
+      )
+    )
+  
+  /// Invariant: If you have direct write access, then that means the flat access list should have reported
+  /// your access as Write, not allowing the read access inherited from a role to squash your write
+  /// access.
+  val InvRoleDoesNotSquashIndividualWrite =
+    arbiters.keys().forall(arbiterDid =>
+      def arbiter = arbiters.get(arbiterDid)
+      arbiter.spaces.keys().forall(spaceKey =>
+        def space = arbiter.spaces.get(spaceKey) 
+        match getSpaceMemberList(arbiterDid, spaceKey) {
+          | Some(flatUserAccessList) =>
+            space.members.keys()
+            .exclude(arbiter.admins.map(x => User(x))).forall(member =>
+              match member {
+                | User(userDid) =>
+                  if (space.members.keys().contains(User(userDid)))
+                    def flatAccess = flatUserAccessList.get(userDid)
+                    def directAccess = space.members.get(User(userDid))
+                    (directAccess == Write).implies(flatAccess == Write)
+                  else true
+                | Role(roleId) => true
+              } 
+            )
+          | None => false
+        }
       )
     )
 
+  /// Get the flattened member list for a space, evaluating roles
+  def getSpaceMemberList(arbiterDid: ArbiterDid, spaceKey: SpaceKey): Option[UserDid -> Access] =
+    // Get the arbiter
+    if (not(arbiterDid.in(arbiters.keys()))) None
+    else def arbiter = arbiters.get(arbiterDid)
+
+    // Get the space
+    if (not(spaceKey.in(arbiter.spaces.keys()))) None
+    else def space = arbiter.spaces.get(spaceKey)
+
+    // Calculate the member access list, resolving roles as necessary
+    def admins = arbiter.admins.fold(Map(), (members, adminDid) => members.put(adminDid, Write))
+    def members = space.members.keys().fold(
+      admins,
+      (members, member) =>
+        match member {
+          | User(userDid) => 
+            if (members.keys().contains(userDid) and members.get(userDid) == Write)
+              members // If the member already has write access, just leave it
+            else 
+              members.put(userDid, space.members.get(member))
+          | Role(roleId) =>
+            def userDids = arbiter.roles.get(roleId)
+            userDids.fold(members, (m, userDid) =>
+              if (m.keys().contains(userDid) and m.get(userDid) == Write)
+                m // If the member already has write access, just leave it
+              else
+                m.put(userDid, space.members.get(member))
+            )
+        }
+    )
+    Some(members)
+
+  /// Create a new arbiter
   action create(userDid: UserDid, arbiterDid: ArbiterDid): bool = all {
     // Arbiter doesn't already exist
     not(arbiterDid.in(arbiters.keys())),
@@ -184,6 +302,7 @@ module arbiter {
       did: arbiterDid,
       // Make the creator an admin
       admins: Set(userDid),
+      roles: Map(),
       spaces: Map()
     })
   } 
@@ -198,13 +317,7 @@ module arbiter {
       userDid.in(arbiter.admins),
       // Add new admin
       def updAdmins = arbiter.admins.union(Set(newAdmin))
-      // Add write access to all arbiter's spaces
-      def spaces = arbiter.spaces
-      def updSpaces = spaces.keys().mapBy(spaceKey => 
-        def space = spaces.get(spaceKey)
-        space.with("members", space.members.put(newAdmin, Write))
-      )
-      def updArbiter = arbiter.with("admins", updAdmins).with("spaces", updSpaces)
+      def updArbiter = arbiter.with("admins", updAdmins)
       arbiters' = arbiters.set(
         arbiterDid,
         updArbiter
@@ -245,7 +358,7 @@ module arbiter {
       // Space key does not exist
       not(spaceKey.in(arbiter.spaces.keys())),
       // Add space key
-      def spaces = arbiter.spaces.put(spaceKey, { members: arbiter.admins.mapBy(x => Write) })
+      def spaces = arbiter.spaces.put(spaceKey, { members: Map() })
       def updatedArbiter = arbiter.with("spaces", spaces)
       arbiters' = arbiters.set(
         arbiterDid,
@@ -259,7 +372,7 @@ module arbiter {
     userDid: UserDid,
     arbiterDid: ArbiterDid,
     spaceKey: SpaceKey,
-    memberDid: UserDid,
+    member: Member,
     access: Access
   ): bool = all {
     // Arbiter exists
@@ -268,14 +381,12 @@ module arbiter {
     all {
       // The user is an admin
       userDid.in(arbiter.admins),
-      // The member DID is not an admin
-      not(memberDid.in(arbiter.admins)),
       // Space exists
       spaceKey.in(arbiter.spaces.keys()),
       def space = arbiter.spaces.get(spaceKey)
       arbiters' = arbiters.set(arbiterDid,
         arbiter.with("spaces", arbiter.spaces.set(spaceKey,
-          space.with("members", space.members.put(memberDid, access)) 
+          space.with("members", space.members.put(member, access)) 
         ))
       )
     }
@@ -286,7 +397,7 @@ module arbiter {
     userDid: UserDid,
     arbiterDid: ArbiterDid,
     spaceKey: SpaceKey,
-    memberDid: UserDid,
+    member: Member,
   ): bool = all {
     // Arbiter exists
     arbiterDid.in(arbiters.keys()),
@@ -294,18 +405,88 @@ module arbiter {
     all {
       // The user is an admin
       userDid.in(arbiter.admins),
-      // The member DID is not an admin
-      not(memberDid.in(arbiter.admins)),
       // Space exists
       spaceKey.in(arbiter.spaces.keys()),
       def space = arbiter.spaces.get(spaceKey)
       arbiters' = arbiters.set(
         arbiterDid,
-        arbiters.get(arbiterDid)
+        arbiter
           .with("spaces", arbiter.spaces.set(spaceKey,
-            space.with("members", space.members.mapRemove(memberDid))  
+            space.with("members", space.members.mapRemove(member))  
           )
         )
+      )
+    }
+  }
+
+  /// Add a new role to the arbiter
+  action createRole(
+    userDid: UserDid,
+    arbiterDid: ArbiterDid,
+    roleId: RoleId,
+  ): bool = all {
+    // Arbiter exists
+    arbiterDid.in(arbiters.keys()),
+    def arbiter = arbiters.get(arbiterDid)
+    all {
+      // The user is an admin
+      userDid.in(arbiter.admins),
+      // Role does not already exist
+      not(roleId.in(arbiter.roles.keys())),
+      // Update roles list
+      arbiters' = arbiters.set(
+        arbiterDid,
+        arbiter.with("roles", arbiter.roles.put(roleId, Set()))
+      )
+    }
+  }
+
+  /// Add a new member to a role
+  action addRoleMember(
+    userDid: UserDid,
+    arbiterDid: ArbiterDid,
+    roleId: RoleId,
+    member: UserDid
+  ): bool = all {
+    // Arbiter exists
+    arbiterDid.in(arbiters.keys()),
+    def arbiter = arbiters.get(arbiterDid)
+    all {
+      // The user is an admin
+      userDid.in(arbiter.admins),
+      // Role already exist
+      roleId.in(arbiter.roles.keys()),
+      // Member not already in role
+      not(member.in(arbiter.roles.get(roleId))),
+      // Update roles list
+      arbiters' = arbiters.set(
+        arbiterDid,
+        arbiter.with("roles", arbiter.roles.setBy(roleId, role => role.union(Set(member))))
+      )
+    }
+  }
+
+  /// Remove a member from a role
+  action removeRoleMember(
+    userDid: UserDid,
+    arbiterDid: ArbiterDid,
+    roleId: RoleId,
+    member: UserDid
+  ): bool = all {
+    // Arbiter exists
+    arbiterDid.in(arbiters.keys()),
+    def arbiter = arbiters.get(arbiterDid)
+    all {
+      // The user is an admin
+      userDid.in(arbiter.admins),
+      // Role already exist
+      roleId.in(arbiter.roles.keys()),
+      // Member is in role
+      member.in(arbiter.roles.get(roleId)),
+      // Update roles list
+      arbiters' = arbiters.set(
+        arbiterDid,
+        arbiter.with("roles", arbiter.roles.setBy(roleId, role => role.exclude(Set(member))))
       )
     }
   }
@@ -343,6 +524,7 @@ module types {
   type UserDid = str
   type SpaceKey = int
   type Record = str
+  type RoleId = str
 
   /// The PDS data associated to an individual user
   type UserPds = {
@@ -368,16 +550,19 @@ module types {
   /// The access a member may have to a permissioned space
   type Access = Read | Write
 
+  type Member = Role(RoleId) | User(UserDid)
+
   /// A permissioned space
   type PermSpace = {
     // The access level for each member in the space
-    members: UserDid -> Access
+    members: Member -> Access
   }
 
   /// Data for an arbiter
   type Arbiter = {
     did: ArbiterDid,
     admins: Set[UserDid],
+    roles: RoleId -> Set[UserDid],
     spaces: SpaceKey -> PermSpace,
   }
 }
