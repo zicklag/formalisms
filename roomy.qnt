@@ -152,11 +152,20 @@ module arbiter {
   action stutter =
     arbiters' = arbiters
 
+  /// Arbiter invariants
   val Inv = all {
+    InvAtLeastOneAdmin,
     InvAdminWriteSpaces,  
   }
+
+  val InvAtLeastOneAdmin =
+    arbiters.keys().forall(arbiterDid =>
+      def arbiter = arbiters.get(arbiterDid)
+      arbiter.admins.size() >= 1
+    )
+
   /// Arbiter admins always have write access to spaces owned by the arbiter
-  val InvAdminWriteSpaces: bool = 
+  val InvAdminWriteSpaces = 
     arbiters.keys().forall(arbiterDid =>
       def arbiter = arbiters.get(arbiterDid)
       arbiter.admins.forall(adminDid =>
@@ -179,6 +188,7 @@ module arbiter {
     })
   } 
 
+  /// Add an admin to the arbiter
   action addAdmin(userDid: UserDid, arbiterDid: ArbiterDid, newAdmin: UserDid): bool = all {
     // Arbiter exists
     arbiterDid.in(arbiters.keys()),
@@ -202,6 +212,7 @@ module arbiter {
     }
   }
 
+  /// Remove an admin from the arbiter
   action removeAdmin(userDid: UserDid, arbiterDid: ArbiterDid, removedAdminDid: UserDid): bool = all {
     // Arbiter exists
     arbiterDid.in(arbiters.keys()),
@@ -223,6 +234,7 @@ module arbiter {
     }
   }
 
+  /// Create a new space, managed by an arbiter
   action createSpace(userDid: UserDid, arbiterDid: ArbiterDid, spaceKey: SpaceKey): bool = all {
     // Arbiter exists
     arbiterDid.in(arbiters.keys()),
@@ -261,14 +273,15 @@ module arbiter {
       // Space exists
       spaceKey.in(arbiter.spaces.keys()),
       def space = arbiter.spaces.get(spaceKey)
-      def updMembers = space.members.put(memberDid, access)
-      def updSpace = space.with("members", updMembers)
-      def updSpaces = arbiter.spaces.set(spaceKey, updSpace)
-      def updArbiter = arbiter.with("spaces", updSpaces)
-      arbiters' = arbiters.set(arbiterDid, updArbiter)
+      arbiters' = arbiters.set(arbiterDid,
+        arbiter.with("spaces", arbiter.spaces.set(spaceKey,
+          space.with("members", space.members.put(memberDid, access)) 
+        ))
+      )
     }
   }
 
+  /// Remove a member's access to a space
   action removeSpaceMember(
     userDid: UserDid,
     arbiterDid: ArbiterDid,
@@ -286,20 +299,25 @@ module arbiter {
       // Space exists
       spaceKey.in(arbiter.spaces.keys()),
       def space = arbiter.spaces.get(spaceKey)
-      def updMembers = space.members.mapRemove(memberDid)
-      def updSpace = space.with("members", updMembers)
-      def updSpaces = arbiter.spaces.set(spaceKey, updSpace)
-      def updArbiter = arbiter.with("spaces", updSpaces)
-      arbiters' = arbiters.set(arbiterDid, updArbiter)
+      arbiters' = arbiters.set(
+        arbiterDid,
+        arbiters.get(arbiterDid)
+          .with("spaces", arbiter.spaces.set(spaceKey,
+            space.with("members", space.members.mapRemove(memberDid))  
+          )
+        )
+      )
     }
   }
 }
 
 module steward {
   import types.*
+
+  var placeholder: int
   
-  action init
-  action stutter
+  action init = placeholder' = 0
+  action stutter = placeholder' = placeholder
 }
 
 /// Contains a global counter that can be used to create new IDS.
@@ -314,7 +332,7 @@ module id {
 }
 
 module types {
-  import basicSpells from "./basicSpells"
+  import basicSpells.* from "./basicSpells"
   export basicSpells.*
 
   //
@@ -362,9 +380,4 @@ module types {
     admins: Set[UserDid],
     spaces: SpaceKey -> PermSpace,
   }
-
-  //
-  // Steward
-  //
-
 }
